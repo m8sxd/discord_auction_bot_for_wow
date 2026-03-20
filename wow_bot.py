@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 
-def get_price(url):
+def get_data(url):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -13,15 +13,24 @@ def get_price(url):
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Najdeme cenu
             price_element = soup.find('div', {'data-slot': 'card-title'})
+            price = 0.0
             if price_element:
                 price_text = price_element.get_text(strip=True).replace(",", "")
-                return float(price_text)
+                price = float(price_text)
+            
+            # Najdeme čas aktualizace (podle screenshotu)
+            time_element = soup.find('p', class_='text-sm text-muted-foreground')
+            time_text = time_element.get_text(strip=True) if time_element else "Unknown"
+            
+            return {"price": price, "time": time_text}
     except Exception as e:
-        print(f"Chyba u {url}: {e}")
-    return 0.0
+        print(f"Error fetching {url}: {e}")
+    return {"price": 0.0, "time": "Error"}
 
-def calculate_profits():
+def calculate_all():
     urls_void = [
         "https://wowpricehub.com/eu/drak'thul/item/Ace%20of%20Void-245838",
         "https://wowpricehub.com/eu/drak'thul/item/Two%20of%20Void-245839",
@@ -49,38 +58,46 @@ def calculate_profits():
     all_urls = urls_void + urls_blood
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        results = list(executor.map(get_price, all_urls))
+        results = list(executor.map(get_data, all_urls))
 
-    void_profit = round(results[8] - sum(results[0:8]))
-    blood_profit = round(results[17] - sum(results[9:17]))
+    # Výpočet profitů (používáme .get('price'))
+    void_cards_sum = sum(r['price'] for r in results[0:8])
+    void_deck_price = results[8]['price']
+    void_profit = round(void_deck_price - void_cards_sum)
+
+    blood_cards_sum = sum(r['price'] for r in results[9:17])
+    blood_deck_price = results[17]['price']
+    blood_profit = round(blood_deck_price - blood_cards_sum)
     
-    return void_profit, blood_profit
+    # Vezmeme čas aktualizace z posledního staženého požadavku
+    last_update = results[17]['time']
+    
+    return void_profit, blood_profit, last_update
 
-# Úprava oprávnění pro starší verzi discord.py
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix='!', intents=intents)
+bot.remove_command('help')
 
 @bot.event
 async def on_ready():
-    print(f'Bot se úspěšně přihlásil jako {bot.user}')
+    print(f'Bot successfully logged in as {bot.user}')
 
 @bot.command()
 async def profit(ctx):
-    await ctx.send("Počítám aktuální ceny, chvilku strpení... ⏳")
+    await ctx.send("Calculating current prices, please wait... ⏳")
     
-    # Úprava asynchronního spouštění pro Python 3.6
-    void_profit, blood_profit = await bot.loop.run_in_executor(None, calculate_profits)
+    void_profit, blood_profit, last_update = await bot.loop.run_in_executor(None, calculate_all)
     
-    zprava = (
-        f":bar_chart: **Aktuální profit na Drak'thulu:**\n"
-        f":black_joker: **Deck of Void:** `{void_profit}` goldů\n"
-        f":drop_of_blood: **Deck of Blood:** `{blood_profit}` goldů"
+    message = (
+        f":bar_chart: **Current profit on Drak'thul:**\n"
+        f":black_joker: **Deck of Void:** `{void_profit}` gold\n"
+        f":drop_of_blood: **Deck of Blood:** `{blood_profit}` gold\n\n"
+        f"🕒 *{last_update}*"
     )
-    await ctx.send(zprava)
+    await ctx.send(message)
 
-# SEM VLOŽ SVŮJ TOKEN Z DISCORD DEVELOPER PORTALU
 with open("token.txt", "r") as file:
     TOKEN = file.read().strip()
-    
+
 if __name__ == "__main__":
     bot.run(TOKEN)
